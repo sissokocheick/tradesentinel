@@ -6,6 +6,8 @@
 [![Binance Agent OS](https://img.shields.io/badge/Binance-Agent%20OS-f0b90b)](https://binance.com/en/agent-os)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
+![TradeSentinel Live Dashboard](dashboard_preview.png)
+
 ---
 
 ## 🎯 What Is TradeSentinel?
