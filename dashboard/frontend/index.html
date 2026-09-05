@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TradeSentinel — Live Dashboard</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg" />
+  <link rel="apple-touch-icon" href="/logo.svg" />
   <style>
     :root {
       --bg: #0d1117;
@@ -24,7 +26,19 @@
       padding: 16px 24px; border-bottom: 1px solid var(--border);
       background: var(--surface);
     }
-    header h1 { font-size: 1.4rem; color: var(--accent); }
+    .header-brand {
+      display: flex; align-items: center; gap: 12px;
+      text-decoration: none;
+    }
+    .header-logo {
+      width: 34px; height: 34px;
+      filter: drop-shadow(0 0 8px rgba(240, 185, 11, 0.45));
+      transition: transform 0.2s ease;
+    }
+    .header-logo:hover {
+      transform: scale(1.08);
+    }
+    header h1 { font-size: 1.4rem; color: var(--accent); font-weight: 700; letter-spacing: -0.02em; }
     .pill {
       padding: 3px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600;
       background: var(--green); color: #000;
@@ -92,7 +106,10 @@
 <body>
 
 <header>
-  <h1>🛡️ TradeSentinel</h1>
+  <div class="header-brand">
+    <img src="/logo.svg" alt="TradeSentinel" class="header-logo" />
+    <h1>TradeSentinel</h1>
+  </div>
   <span class="pill" id="statusPill">LIVE</span>
   <span style="margin-left:auto; color:var(--muted); font-size:0.8rem">
     Binance Agent OS Hackathon 2026

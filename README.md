@@ -1,10 +1,15 @@
-# 🛡️ TradeSentinel — Multi-Agent Autonomous Trading System
+<div align="center">
+  <img src="logo.svg" width="96" height="96" alt="TradeSentinel Logo" />
+  <h1>TradeSentinel</h1>
+  <p><strong>Autonomous Multi-Agent Trading System with Hard Risk Guardrails</strong></p>
+  <p><em>Binance Agent OS Mini Hackathon 2026 — Track A</em></p>
+</div>
 
-> **Binance Agent OS Mini Hackathon 2026 — Track A Submission**
-
-[![Python](https://img.shields.io/badge/Python-3.12-blue)](https://python.org)
-[![Binance Agent OS](https://img.shields.io/badge/Binance-Agent%20OS-f0b90b)](https://binance.com/en/agent-os)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+<p align="center">
+  <a href="https://python.org"><img src="https://img.shields.io/badge/Python-3.12-blue" alt="Python"></a>
+  <a href="https://binance.com/en/agent-os"><img src="https://img.shields.io/badge/Binance-Agent%20OS-f0b90b" alt="Binance Agent OS"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green" alt="License: MIT"></a>
+</p>
 
 ![TradeSentinel Live Dashboard](dashboard_preview.png)
 

@@ -17,6 +17,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 log = logging.getLogger("dashboard")
@@ -60,6 +61,14 @@ def get_current_balance() -> float:
         except Exception:
             pass
     return 250.00
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    icon_path = Path(__file__).parent / "frontend" / "logo.svg"
+    if icon_path.exists():
+        return FileResponse(icon_path, media_type="image/svg+xml")
+    return None
 
 
 @app.get("/api/status")
