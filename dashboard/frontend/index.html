@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TradeSentinel — Live Dashboard</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --border: #30363d;
+      --accent: #f0b90b; /* Binance yellow */
+      --green: #3fb950;
+      --red: #f85149;
+      --blue: #58a6ff;
+      --text: #e6edf3;
+      --muted: #8b949e;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', monospace; }
+
+    header {
+      display: flex; align-items: center; gap: 16px;
+      padding: 16px 24px; border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    header h1 { font-size: 1.4rem; color: var(--accent); }
+    .pill {
+      padding: 3px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600;
+      background: var(--green); color: #000;
+    }
+    .pill.paused { background: var(--red); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 16px; padding: 24px;
+    }
+    @media(max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 12px; padding: 20px;
+    }
+    .card h2 { font-size: 0.9rem; color: var(--muted); text-transform: uppercase;
+               letter-spacing: 0.06em; margin-bottom: 12px; }
+    .stat { font-size: 2rem; font-weight: 700; color: var(--accent); }
+    .stat-label { font-size: 0.8rem; color: var(--muted); margin-top: 4px; }
+
+    .market-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.85rem;
+    }
+    .market-row:last-child { border: none; }
+    .up { color: var(--green); }
+    .down { color: var(--red); }
+
+    .trade-row {
+      display: flex; gap: 12px; align-items: center;
+      padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 0.82rem;
+    }
+    .badge {
+      padding: 2px 8px; border-radius: 4px; font-size: 0.72rem; font-weight: 700;
+    }
+    .badge.buy  { background: rgba(63,185,80,0.15); color: var(--green); border: 1px solid var(--green); }
+    .badge.sell { background: rgba(248,81,73,0.15);  color: var(--red);   border: 1px solid var(--red); }
+
+    .audit-entry { font-size: 0.76rem; color: var(--muted); padding: 4px 0;
+                   border-bottom: 1px solid var(--border); font-family: monospace; }
+    .audit-entry .event { color: var(--blue); font-weight: 600; }
+
+    .agent-status {
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .agent-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border);
+    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--green); }
+    .dot.idle { background: var(--muted); }
+    .agent-name { font-weight: 600; font-size: 0.9rem; }
+    .agent-desc { font-size: 0.78rem; color: var(--muted); }
+
+    #log {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+      padding: 12px; height: 160px; overflow-y: auto; font-family: monospace;
+      font-size: 0.75rem; color: var(--muted);
+    }
+    #log .ts { color: var(--blue); }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🛡️ TradeSentinel</h1>
+  <span class="pill" id="statusPill">LIVE</span>
+  <span style="margin-left:auto; color:var(--muted); font-size:0.8rem">
+    Binance Agent OS Hackathon 2026
+  </span>
+</header>
+
+<div class="grid">
+
+  <!-- Balance Card -->
+  <div class="card">
+    <h2>💰 Agentic Wallet</h2>
+    <div class="stat" id="balance">$0.00</div>
+    <div class="stat-label">USDC — Isolated sub-account</div>
+    <div style="margin-top:16px; font-size:0.8rem; color:var(--muted)">
+      🔒 External withdrawals disabled by Agent OS
+    </div>
+  </div>
+
+  <!-- Trades Today -->
+  <div class="card">
+    <h2>📈 Today's Trades</h2>
+    <div class="stat" id="tradeCount">0</div>
+    <div class="stat-label">orders executed</div>
+    <div style="margin-top:16px">
+      <div style="display:flex; gap:16px">
+        <div>
+          <div style="font-size:0.75rem; color:var(--muted)">Max position</div>
+          <div style="font-size:1.1rem; font-weight:600">$50 USDC</div>
+        </div>
+        <div>
+          <div style="font-size:0.75rem; color:var(--muted)">Stop-loss</div>
+          <div style="font-size:1.1rem; font-weight:600; color:var(--red)">−2%</div>
+        </div>
+        <div>
+          <div style="font-size:0.75rem; color:var(--muted)">Take-profit</div>
+          <div style="font-size:1.1rem; font-weight:600; color:var(--green)">+4%</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Agent Status -->
+  <div class="card">
+    <h2>🤖 Agent Status</h2>
+    <div class="agent-status">
+      <div class="agent-row">
+        <div class="dot" id="scoutDot"></div>
+        <div>
+          <div class="agent-name">🔍 Scout</div>
+          <div class="agent-desc" id="scoutDesc">Monitoring 5 pairs via MCP</div>
+        </div>
+      </div>
+      <div class="agent-row">
+        <div class="dot" id="strategistDot"></div>
+        <div>
+          <div class="agent-name">🧠 Strategist</div>
+          <div class="agent-desc" id="strategistDesc">Analyzing via LLM</div>
+        </div>
+      </div>
+      <div class="agent-row">
+        <div class="dot" id="executorDot"></div>
+        <div>
+          <div class="agent-name">⚡ Executor</div>
+          <div class="agent-desc" id="executorDesc">Waiting for signals</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Market Data -->
+  <div class="card" style="grid-column: span 2;">
+    <h2>📊 Live Market (via Binance MCP)</h2>
+    <div id="marketData">
+      <div class="market-row">
+        <span>Loading market data…</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recent Trades -->
+  <div class="card">
+    <h2>🗂️ Recent Trades</h2>
+    <div id="recentTrades">
+      <div style="color:var(--muted); font-size:0.85rem">No trades yet.</div>
+    </div>
+  </div>
+
+  <!-- Audit Trail -->
+  <div class="card" style="grid-column: span 3;">
+    <h2>📋 Audit Trail (immutable log)</h2>
+    <div id="auditLog">
+      <div class="audit-entry">Waiting for events…</div>
+    </div>
+  </div>
+
+  <!-- Live Log -->
+  <div class="card" style="grid-column: span 3;">
+    <h2>🖥️ Live System Log</h2>
+    <div id="log"></div>
+  </div>
+
+</div>
+
+<script>
+  // ── WebSocket connection ────────────────────────────────────
+  const WS_URL = `ws://${location.host}/ws`;
+  let ws;
+
+  function connect() {
+    ws = new WebSocket(WS_URL);
+    ws.onopen    = () => addLog("Connected to TradeSentinel backend");
+    ws.onclose   = () => { addLog("WS disconnected — reconnecting in 3s…"); setTimeout(connect, 3000); };
+    ws.onerror   = (e) => addLog("WS error: " + e.message);
+    ws.onmessage = (e) => handleMessage(JSON.parse(e.data));
+  }
+
+  function handleMessage(msg) {
+    if (msg.type === "init" || msg.type === "state_update") {
+      const d = msg.data;
+      if (d.balance_usdc !== undefined)
+        document.getElementById("balance").textContent = "$" + d.balance_usdc.toFixed(2);
+      if (d.trades)
+        renderTrades(d.trades);
+      if (d.market_snapshots)
+        renderMarket(d.market_snapshots);
+      if (d.last_decisions)
+        renderAudit(d.last_decisions);
+    }
+    if (msg.type === "trade") {
+      addLog(`🔔 Trade: ${msg.data.side} ${msg.data.symbol} @ $${msg.data.entry_price}`);
+    }
+    addLog(msg.ts ? `[${msg.ts.slice(11,19)}] ${msg.type}` : msg.type);
+  }
+
+  function renderMarket(snapshots) {
+    const el = document.getElementById("marketData");
+    if (!Object.keys(snapshots).length) return;
+    el.innerHTML = Object.values(snapshots).map(s => `
+      <div class="market-row">
+        <span style="font-weight:600;width:90px">${s.symbol}</span>
+        <span>$${Number(s.price).toLocaleString()}</span>
+        <span class="${s.price_change_24h_pct >= 0 ? 'up' : 'down'}">
+          ${s.price_change_24h_pct >= 0 ? '+' : ''}${Number(s.price_change_24h_pct).toFixed(2)}%
+        </span>
+        <span style="color:var(--muted)">RSI: ${s.rsi_14 ?? 'N/A'}</span>
+        <span style="color:var(--muted)">${s.macd_signal ?? ''}</span>
+        <span style="color:var(--muted)">OB: ${s.order_book_imbalance > 0 ? '🟢' : '🔴'} ${Number(s.order_book_imbalance).toFixed(2)}</span>
+      </div>
+    `).join("");
+  }
+
+  function renderTrades(trades) {
+    const el = document.getElementById("recentTrades");
+    document.getElementById("tradeCount").textContent = trades.length;
+    if (!trades.length) { el.innerHTML = '<div style="color:var(--muted);font-size:0.85rem">No trades yet.</div>'; return; }
+    el.innerHTML = trades.slice(-10).reverse().map(t => `
+      <div class="trade-row">
+        <span class="badge ${t.side.toLowerCase()}">${t.side}</span>
+        <span style="font-weight:600">${t.symbol}</span>
+        <span style="color:var(--muted)">$${Number(t.entry_price).toFixed(2)}</span>
+        <span style="font-size:0.75rem;color:var(--muted)">${t.strategy}</span>
+      </div>
+    `).join("");
+  }
+
+  function renderAudit(decisions) {
+    const el = document.getElementById("auditLog");
+    if (!decisions.length) return;
+    el.innerHTML = decisions.slice(-20).reverse().map(d => `
+      <div class="audit-entry">
+        <span class="ts">${d.ts?.slice(0,19) ?? ''}</span>
+        [<span class="event">${d.event}</span>]
+        ${d.symbol} · ${d.side ?? ''} · confidence=${d.confidence ?? ''}%
+        · ${d.rationale?.slice(0,80) ?? d.reason ?? ''}
+      </div>
+    `).join("");
+  }
+
+  // Fallback: poll REST API every 5s if WS is unavailable
+  setInterval(async () => {
+    try {
+      const [status, trades, market, audit] = await Promise.all([
+        fetch("/api/status").then(r => r.json()),
+        fetch("/api/trades").then(r => r.json()),
+        fetch("/api/market").then(r => r.json()),
+        fetch("/api/audit?limit=20").then(r => r.json()),
+      ]);
+      document.getElementById("balance").textContent = "$" + (status.balance_usdc || 0).toFixed(2);
+      renderTrades(trades);
+      renderMarket(market);
+      renderAudit(audit);
+    } catch (e) {}
+  }, 5000);
+
+  function addLog(msg) {
+    const el = document.getElementById("log");
+    const ts = new Date().toISOString().slice(11,19);
+    el.innerHTML += `<div><span class="ts">[${ts}]</span> ${msg}</div>`;
+    el.scrollTop = el.scrollHeight;
+    // Keep max 100 lines
+    while (el.children.length > 100) el.removeChild(el.firstChild);
+  }
+
+  connect();
+</script>
+</body>
+</html>
