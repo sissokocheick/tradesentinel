@@ -113,15 +113,9 @@ class ExecutorAgent:
             log.error(f"[{trade_id}] Zero quantity — aborting.")
             return
 
-        # Binance LOT_SIZE step sizes
-        decimals = 2
-        if intent.symbol == "BTCUSDT": decimals = 5
-        elif intent.symbol == "ETHUSDT": decimals = 4
-        elif intent.symbol == "BNBUSDT": decimals = 3
-        elif intent.symbol == "XRPUSDT": decimals = 0
-        
-        quantity = round(quantity, decimals)
-        if decimals == 0: quantity = int(quantity)
+        qty_dec, _ = self._get_precision(intent.symbol)
+        quantity = round(quantity, qty_dec)
+        if qty_dec == 0: quantity = int(quantity)
 
         try:
             order_result = await self.mcp.place_market_order(
@@ -154,18 +148,31 @@ class ExecutorAgent:
         if assessment.stop_loss_price:
             await self._place_stop_limit(trade_id, intent, assessment, quantity)
 
+    def _get_precision(self, symbol: str) -> tuple[int, int]:
+        """Returns (qty_decimals, price_decimals) for formatting."""
+        if symbol == "BTCUSDT": return 5, 2
+        if symbol == "ETHUSDT": return 4, 2
+        if symbol == "BNBUSDT": return 3, 2
+        if symbol == "SOLUSDT": return 2, 3
+        if symbol == "XRPUSDT": return 0, 4
+        return 2, 2
+
     async def _place_stop_limit(self, trade_id, intent, assessment, quantity):
         """Place a limit stop-loss order to protect the position."""
         sl_side = "SELL" if intent.side == "BUY" else "BUY"
+        qty_dec, price_dec = self._get_precision(intent.symbol)
+        
+        sl_price = round(assessment.stop_loss_price, price_dec)
+        
         try:
             sl_order = await self.mcp.place_limit_order(
                 symbol      = intent.symbol,
                 side        = sl_side,
-                quantity    = round(quantity, 6),
-                price       = assessment.stop_loss_price,
+                quantity    = quantity, # Already rounded during market order
+                price       = sl_price,
                 time_in_force = "GTC",
             )
-            log.info(f"[{trade_id}] 🛡️  Stop-loss set at ${assessment.stop_loss_price}")
+            log.info(f"[{trade_id}] 🛡️  Stop-loss set at ${sl_price}")
             self._audit(trade_id, "stop_loss_set", intent, sl_order=sl_order)
         except Exception as e:
             log.warning(f"[{trade_id}] Stop-loss placement failed: {e}")
