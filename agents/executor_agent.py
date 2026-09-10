@@ -158,21 +158,24 @@ class ExecutorAgent:
         return 2, 2
 
     async def _place_stop_limit(self, trade_id, intent, assessment, quantity):
-        """Place a limit stop-loss order to protect the position."""
+        """Place a true STOP_LOSS_LIMIT order to protect the position without premature filling."""
         sl_side = "SELL" if intent.side == "BUY" else "BUY"
         qty_dec, price_dec = self._get_precision(intent.symbol)
         
-        sl_price = round(assessment.stop_loss_price, price_dec)
+        sl_trigger = round(assessment.stop_loss_price, price_dec)
+        # 0.5% execution buffer to ensure the limit fills if stop price is triggered
+        sl_limit = round(sl_trigger * (0.995 if sl_side == "SELL" else 1.005), price_dec)
         
         try:
-            sl_order = await self.mcp.place_limit_order(
+            sl_order = await self.mcp.place_stop_loss_order(
                 symbol      = intent.symbol,
                 side        = sl_side,
                 quantity    = quantity, # Already rounded during market order
-                price       = sl_price,
+                stop_price  = sl_trigger,
+                limit_price = sl_limit,
                 time_in_force = "GTC",
             )
-            log.info(f"[{trade_id}] 🛡️  Stop-loss set at ${sl_price}")
+            log.info(f"[{trade_id}] 🛡️  True Stop-Loss Limit armed: trigger=${sl_trigger} | limit=${sl_limit}")
             self._audit(trade_id, "stop_loss_set", intent, sl_order=sl_order)
         except Exception as e:
             log.warning(f"[{trade_id}] Stop-loss placement failed: {e}")
