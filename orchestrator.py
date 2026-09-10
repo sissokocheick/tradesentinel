@@ -62,11 +62,12 @@ class TradeSentinelOrchestrator:
     Inter-agent communication via asyncio Queues (lock-free, fast).
     """
 
-    def __init__(self, demo_mode: bool = False):
+    def __init__(self, demo_mode: bool = False, testnet: bool = False):
         self.demo_mode  = demo_mode
+        self.testnet    = testnet
 
         # Shared infrastructure
-        self.mcp     = BinanceMCPClient()
+        self.mcp     = BinanceMCPClient(testnet=testnet)
         self.risk    = RiskManager()
         self.wallet  = AgenticWallet(self.mcp)
         self.x402    = X402Client()
@@ -190,6 +191,7 @@ class TradeSentinelOrchestrator:
 async def main():
     parser = argparse.ArgumentParser(description="TradeSentinel — Binance Agent OS Hackathon")
     parser.add_argument("--demo",      action="store_true", help="Mock mode (no real orders)")
+    parser.add_argument("--testnet",   action="store_true", help="Run on Binance Spot Testnet")
     parser.add_argument("--dashboard", action="store_true", help="Launch web dashboard")
     args = parser.parse_args()
 
@@ -204,7 +206,7 @@ async def main():
         )
         log.info("Dashboard started at http://localhost:8000")
 
-    orchestrator = TradeSentinelOrchestrator(demo_mode=args.demo)
+    orchestrator = TradeSentinelOrchestrator(demo_mode=args.demo, testnet=args.testnet)
 
     try:
         await orchestrator.run()

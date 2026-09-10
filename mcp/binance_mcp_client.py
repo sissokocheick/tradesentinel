@@ -42,13 +42,7 @@ MCP_SESSION    = os.getenv("BINANCE_MCP_SESSION_TOKEN", "")    # OAuth session t
 class BinanceMCPClient:
     """
     Unified async client for the Binance Agent OS MCP Server.
-
-    Auth mode is selected automatically from .env:
-      - 'oauth'  → uses session token from browser authorization
-      - 'apikey' → uses HMAC-signed API key (traditional)
-
-    Per official docs: https://developers.binance.com/en/docs/agent-native/mcp-server/agentic
-    WITHDRAWAL SCOPE IS NEVER AVAILABLE — all fund movements stay inside the Agentic sub-account.
+    Now with full Spot Testnet support.
     """
 
     def __init__(
@@ -58,14 +52,24 @@ class BinanceMCPClient:
         api_key:     str = MCP_API_KEY,
         secret:      str = MCP_SECRET,
         session_token: str = MCP_SESSION,
+        testnet:     bool = False,
     ):
-        self.base_url      = base_url.rstrip("/")
-        self.auth_mode     = auth_mode
-        self.api_key       = api_key
-        self.secret        = secret
+        self.testnet       = testnet
+        if self.testnet:
+            log.info("Testnet enabled: overriding keys and URLs for testnet.binance.vision")
+            self.api_key = os.getenv("BINANCE_TESTNET_API_KEY", "")
+            self.secret = os.getenv("BINANCE_TESTNET_SECRET", "")
+            self.base_url = "https://testnet.binance.vision"
+            self.auth_mode = "apikey"
+        else:
+            self.base_url      = base_url.rstrip("/")
+            self.auth_mode     = auth_mode
+            self.api_key       = api_key
+            self.secret        = secret
+
         self.session_token = session_token
         self._client       = httpx.AsyncClient(timeout=15.0)
-        log.info(f"BinanceMCPClient initialized | auth_mode={auth_mode} | endpoint={base_url}")
+        log.info(f"BinanceMCPClient initialized | auth_mode={self.auth_mode} | endpoint={self.base_url}")
 
     # ─────────────────────────────────────────────────────────
     # Public Market Data
@@ -212,17 +216,51 @@ class BinanceMCPClient:
         signed:  bool = False,
         method:  str  = "GET",
     ) -> Any:
-        """Send request to the MCP server via JSON-RPC (requires OAuth session)."""
+        """Send request. If on testnet, send direct signed REST. Else, MCP JSON-RPC."""
+        if self.testnet:
+            # Map MCP endpoints to Standard Spot REST endpoints
+            rest_path = path
+            if path == "account/balance":
+                rest_path = "account"
+                method = "GET"
+            elif path == "account/openOrders":
+                rest_path = "openOrders"
+                method = "GET"
+            elif path == "account/trades":
+                rest_path = "myTrades"
+                method = "GET"
+                
+            return await self._signed_rest(method, f"/api/v3/{rest_path}", params)
+            
         # When using MCP JSON-RPC protocol:
         return await self.mcp_jsonrpc(path, params or {})
 
+    async def _signed_rest(self, method: str, path: str, params: dict = None) -> Any:
+        """Direct Binance signed REST call (used for testnet)."""
+        params = params or {}
+        params['timestamp'] = int(time.time() * 1000)
+        query_string = "&".join([f"{k}={v}" for k, v in params.items()])
+        signature = hmac.new(self.secret.encode('utf-8'), query_string.encode('utf-8'), hashlib.sha256).hexdigest()
+        params['signature'] = signature
+        
+        url = self.base_url + path
+        headers = {"X-MBX-APIKEY": self.api_key}
+        try:
+            if method == "GET":
+                resp = await self._client.get(url, headers=headers, params=params)
+            elif method == "DELETE":
+                resp = await self._client.delete(url, headers=headers, params=params)
+            else:
+                resp = await self._client.post(url, headers=headers, params=params)
+            resp.raise_for_status()
+            return resp.json()
+        except httpx.HTTPStatusError as e:
+            raise BinanceMCPError(f"REST {e.response.status_code} on {path}: {e.response.text[:200]}")
+
     async def _public_rest(self, method: str, path: str, params: dict = None) -> Any:
-        """
-        Call the Binance public REST API (api.binance.com).
-        No authentication required — used for all market data.
-        """
-        base = "https://api.binance.com"
-        if path.startswith("/fapi"):
+        """Call the Binance public REST API."""
+        base = self.base_url if self.testnet else "https://api.binance.com"
+        if not self.testnet and path.startswith("/fapi"):
             base = "https://fapi.binance.com"
         url = base + path
         headers = {"Content-Type": "application/json"}

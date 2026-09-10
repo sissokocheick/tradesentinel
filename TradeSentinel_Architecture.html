@@ -1,0 +1,142 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TradeSentinel Architecture</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #ffffff;
+            color: #1e2329;
+            line-height: 1.6;
+            margin: 0;
+            padding: 40px;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .header {
+            text-align: center;
+            border-bottom: 2px solid #F0B90B;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            color: #0b0e11;
+            margin: 0;
+            font-size: 32px;
+        }
+        .header p {
+            color: #474d57;
+            font-size: 16px;
+            margin-top: 5px;
+        }
+        h2 {
+            color: #F0B90B;
+            font-size: 24px;
+            border-bottom: 1px solid #eaecef;
+            padding-bottom: 5px;
+            margin-top: 40px;
+        }
+        .pipeline {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 40px 0;
+            padding: 20px;
+            background-color: #fafafa;
+            border-radius: 8px;
+            border: 1px solid #eaecef;
+        }
+        .agent-box {
+            background-color: #0b0e11;
+            color: #ffffff;
+            padding: 20px;
+            border-radius: 8px;
+            width: 28%;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .agent-box h3 {
+            color: #F0B90B;
+            margin-top: 0;
+        }
+        .arrow {
+            font-size: 24px;
+            color: #F0B90B;
+            font-weight: bold;
+        }
+        .section-content {
+            margin-bottom: 20px;
+        }
+        .footer {
+            margin-top: 60px;
+            text-align: center;
+            color: #848e9c;
+            font-size: 12px;
+            border-top: 1px solid #eaecef;
+            padding-top: 20px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h1>TradeSentinel</h1>
+        <p>System Architecture & Trading Flow</p>
+    </div>
+
+    <div class="section-content">
+        <p><strong>TradeSentinel</strong> is an autonomous, multi-agent artificial intelligence system designed for secure, real-time trading on the Binance network. Instead of a monolithic bot, the system is separated into three highly specialized AI agents working sequentially. This separation of concerns ensures that the AI reasoning is strictly bounded by hardcoded programmatic risk controls.</p>
+    </div>
+
+    <h2>1. The 3-Agent Pipeline</h2>
+    <div class="pipeline">
+        <div class="agent-box">
+            <h3>1. Scout</h3>
+            <p style="font-size: 13px;">Data Perception</p>
+        </div>
+        <div class="arrow">➔</div>
+        <div class="agent-box">
+            <h3>2. Strategist</h3>
+            <p style="font-size: 13px;">LLM Reasoning</p>
+        </div>
+        <div class="arrow">➔</div>
+        <div class="agent-box">
+            <h3>3. Executor</h3>
+            <p style="font-size: 13px;">Risk & Action</p>
+        </div>
+    </div>
+
+    <h2>2. Component Deep-Dive</h2>
+    
+    <div class="section-content">
+        <p><strong>Agent 1: The Scout (Perception Layer)</strong><br>
+        The Scout agent acts as the eyes and ears of the system. It continuously polls the Binance Web3 Open APIs and the Model Context Protocol (MCP) servers. It aggregates real-time order book depth, candlestick data (OHLCV), volume metrics, and breaking market news. It formats this multi-modal raw data into a clean, contextual JSON package.</p>
+    </div>
+
+    <div class="section-content">
+        <p><strong>Agent 2: The Strategist (Reasoning Layer)</strong><br>
+        The Strategist is the brain. It takes the structured data package from the Scout and injects it into a highly specialized prompt harness sent to a Large Language Model (LLM). The LLM analyzes market sentiment, technical indicators, and momentum. It does not trade directly; rather, it outputs a "Trade Intention" (e.g., BUY BTC, 0.5 risk weight, due to high order block demand).</p>
+    </div>
+
+    <div class="section-content">
+        <p><strong>Agent 3: The Executor (Risk & Execution Firewall)</strong><br>
+        The Executor is the most critical component. It intercepts the "Trade Intention" from the Strategist and runs it through a gauntlet of hardcoded Python risk checks. It verifies daily drawdown limits, enforces a maximum portfolio allocation per trade (e.g., 5%), and calculates an mandatory stop-loss. Only if all risk conditions are met does the Executor sign and execute the transaction via the Binance API.</p>
+    </div>
+
+    <h2>3. Data State & Reproducibility</h2>
+    <div class="section-content">
+        <p>To ensure full transparency during live operations, the system features a built-in Audit Trail logger. Every complete cycle writes to an immutable local JSON log containing the exact timestamp, the market data perceived by the Scout, the exact prompt/response from the Strategist LLM, and the final execution status (or rejection reason) from the Executor. This guarantees that the agent's "thought process" is 100% reproducible and verifiable.</p>
+    </div>
+
+    <div class="footer">
+        Submitted for the Binance Agentic AI Challenge | Beyond the Benchmark
+    </div>
+</div>
+
+</body>
+</html>

@@ -82,7 +82,8 @@ class ExecutorAgent:
 
         # ── Step 1: Risk assessment ──────────────────────────
         assessment = self.risk.assess(intent)
-        self._audit(trade_id, "risk_assessment", intent, assessment=assessment.__dict__)
+        assessment_dict = {**assessment.__dict__, "decision": assessment.decision.value}
+        self._audit(trade_id, "risk_assessment", intent, assessment=assessment_dict)
 
         if assessment.decision == RiskDecision.REJECTED:
             log.warning(f"[{trade_id}] ❌ REJECTED — {assessment.reason}")
@@ -120,7 +121,7 @@ class ExecutorAgent:
                 client_order_id  = f"ts_{trade_id}",
             )
             log.info(f"[{trade_id}] ✅ ORDER PLACED — {order_result}")
-            self._audit(trade_id, "order_placed", intent, order=order_result, assessment=assessment.__dict__)
+            self._audit(trade_id, "order_placed", intent, order=order_result, assessment=assessment_dict)
 
             # Update risk state
             self.risk.record_trade(intent.symbol, intent.side, intent.entry_price, quantity)
