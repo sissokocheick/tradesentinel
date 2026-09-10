@@ -113,11 +113,21 @@ class ExecutorAgent:
             log.error(f"[{trade_id}] Zero quantity — aborting.")
             return
 
+        # Binance LOT_SIZE step sizes
+        decimals = 2
+        if intent.symbol == "BTCUSDT": decimals = 5
+        elif intent.symbol == "ETHUSDT": decimals = 4
+        elif intent.symbol == "BNBUSDT": decimals = 3
+        elif intent.symbol == "XRPUSDT": decimals = 0
+        
+        quantity = round(quantity, decimals)
+        if decimals == 0: quantity = int(quantity)
+
         try:
             order_result = await self.mcp.place_market_order(
                 symbol           = intent.symbol,
                 side             = intent.side,
-                quantity         = round(quantity, 6),
+                quantity         = quantity,
                 client_order_id  = f"ts_{trade_id}",
             )
             log.info(f"[{trade_id}] ✅ ORDER PLACED — {order_result}")
