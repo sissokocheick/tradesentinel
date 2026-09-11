@@ -6,6 +6,7 @@
   <title>TradeSentinel — Live Dashboard</title>
   <link rel="icon" type="image/svg+xml" href="/logo.svg" />
   <link rel="apple-touch-icon" href="/logo.svg" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     :root {
       --bg: #0d1117;
@@ -44,6 +45,25 @@
       background: var(--green); color: #000;
     }
     .pill.paused { background: var(--red); }
+
+    .btn-export {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 6px 14px; border-radius: 6px; font-size: 0.75rem; font-weight: 600;
+      background: rgba(240, 185, 11, 0.12); color: var(--accent);
+      border: 1px solid rgba(240, 185, 11, 0.35); text-decoration: none;
+      transition: all 0.2s ease; cursor: pointer;
+    }
+    .btn-export:hover {
+      background: var(--accent); color: #000; box-shadow: 0 0 10px rgba(240, 185, 11, 0.4);
+    }
+
+    .pos-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 10px 12px; margin-bottom: 8px; border-radius: 8px;
+      background: var(--bg); border: 1px solid var(--border); font-size: 0.82rem;
+    }
+    .pos-symbol { font-weight: 700; color: var(--text); }
+    .pos-pnl { font-weight: 700; font-size: 0.85rem; }
 
     .grid {
       display: grid;
@@ -111,6 +131,9 @@
     <h1>TradeSentinel</h1>
   </div>
   <span class="pill" id="statusPill">LIVE</span>
+  <a href="/api/export/csv" class="btn-export" download="tradesentinel_audit_report.csv">
+    📥 Export Audit Report (CSV)
+  </a>
   <span style="margin-left:auto; color:var(--muted); font-size:0.8rem">
     Binance Agent OS Hackathon 2026
   </span>
@@ -232,6 +255,28 @@
     </div>
   </div>
 
+  <!-- Live Equity Curve & Performance -->
+  <div class="card" style="grid-column: span 2;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+      <h2 style="margin-bottom: 0;">📈 Cumulative PnL & Equity Curve</h2>
+      <span style="font-size: 0.72rem; color: var(--green); background: rgba(63,185,80,0.12); border: 1px solid rgba(63,185,80,0.3); padding: 2px 8px; border-radius: 4px; font-weight: 600;">LIVE COMPOUNDING</span>
+    </div>
+    <div style="position: relative; height: 220px; width: 100%;">
+      <canvas id="equityChart"></canvas>
+    </div>
+  </div>
+
+  <!-- Active Open Positions -->
+  <div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+      <h2 style="margin-bottom: 0;">💼 Active Positions</h2>
+      <span style="font-size: 0.72rem; color: var(--accent); background: rgba(240,185,11,0.12); border: 1px solid rgba(240,185,11,0.3); padding: 2px 8px; border-radius: 4px; font-weight: 600;" id="openPositionsCount">--</span>
+    </div>
+    <div id="openPositions" style="max-height: 220px; overflow-y: auto;">
+      <div style="color:var(--muted); font-size:0.85rem">Tracking portfolio inventory...</div>
+    </div>
+  </div>
+
   <!-- Audit Trail -->
   <div class="card" style="grid-column: span 3;">
     <h2>📋 Audit Trail (immutable log)</h2>
@@ -274,11 +319,113 @@
         renderAudit(d.last_decisions);
       if (d.analytics)
         renderAnalytics(d.analytics);
+      if (d.positions)
+        renderPositions(d.positions);
+      if (d.equity_curve)
+        renderEquityChart(d.equity_curve);
     }
     if (msg.type === "trade") {
       addLog(`🔔 Trade: ${msg.data.side} ${msg.data.symbol} @ $${msg.data.entry_price}`);
     }
     addLog(msg.ts ? `[${msg.ts.slice(11,19)}] ${msg.type}` : msg.type);
+  }
+
+  let equityChart = null;
+
+  function renderEquityChart(points) {
+    if (!points || !points.length) return;
+    const canvas = document.getElementById("equityChart");
+    if (!canvas) return;
+    
+    const labels = points.map(p => p.ts || `#${p.step}`);
+    const data = points.map(p => p.cum_pnl);
+    
+    if (equityChart) {
+      equityChart.data.labels = labels;
+      equityChart.data.datasets[0].data = data;
+      equityChart.update('none');
+      return;
+    }
+    
+    if (typeof Chart === 'undefined') return;
+    
+    const ctx = canvas.getContext('2d');
+    const gradient = ctx.createLinearGradient(0, 0, 0, 220);
+    gradient.addColorStop(0, 'rgba(63, 185, 80, 0.28)');
+    gradient.addColorStop(1, 'rgba(63, 185, 80, 0.00)');
+    
+    equityChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Cumulative PnL (%)',
+          data: data,
+          borderColor: '#3fb950',
+          backgroundColor: gradient,
+          fill: true,
+          tension: 0.32,
+          borderWidth: 2.2,
+          pointRadius: points.length > 25 ? 1 : 3,
+          pointBackgroundColor: '#3fb950',
+          pointHoverRadius: 5,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            mode: 'index',
+            intersect: false,
+            callbacks: {
+              label: (c) => ` PnL: ${c.parsed.y >= 0 ? '+' : ''}${c.parsed.y.toFixed(2)}%`
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { color: 'rgba(48, 54, 61, 0.45)' },
+            ticks: { color: '#8b949e', font: { size: 10 }, maxTicksLimit: 10 }
+          },
+          y: {
+            grid: { color: 'rgba(48, 54, 61, 0.45)' },
+            ticks: {
+              color: '#8b949e',
+              font: { size: 10 },
+              callback: (v) => `${v >= 0 ? '+' : ''}${v}%`
+            }
+          }
+        }
+      }
+    });
+  }
+
+  function renderPositions(positions) {
+    const el = document.getElementById("openPositions");
+    const countBadge = document.getElementById("openPositionsCount");
+    if (!el) return;
+    if (!positions || !positions.length) {
+      el.innerHTML = '<div style="color:var(--muted); font-size:0.85rem">No active positions.</div>';
+      if (countBadge) countBadge.textContent = "0 active";
+      return;
+    }
+    if (countBadge) countBadge.textContent = `${positions.length} active`;
+    el.innerHTML = positions.map(p => `
+      <div class="pos-row">
+        <div>
+          <div class="pos-symbol">${p.symbol} <span style="font-size:0.7rem; font-weight:normal; color:var(--muted)">(${p.trades_count} fills)</span></div>
+          <div style="font-size:0.72rem; color:var(--muted)">Avg: $${p.avg_entry} · Now: $${p.current_price}</div>
+        </div>
+        <div style="text-align:right">
+          <div class="pos-pnl ${p.pnl_pct >= 0 ? 'up' : 'down'}">
+            ${p.pnl_pct >= 0 ? '+' : ''}${p.pnl_pct.toFixed(2)}%
+          </div>
+          <div style="font-size:0.7rem; color:var(--muted)">${p.status}</div>
+        </div>
+      </div>
+    `).join("");
   }
 
   function renderMarket(snapshots) {
@@ -348,18 +495,22 @@
   // Fallback: poll REST API every 4s
   setInterval(async () => {
     try {
-      const [status, trades, market, audit, analytics] = await Promise.all([
+      const [status, trades, market, audit, analytics, positions, equity] = await Promise.all([
         fetch("/api/status").then(r => r.json()),
         fetch("/api/trades").then(r => r.json()),
         fetch("/api/market").then(r => r.json()),
         fetch("/api/audit?limit=20").then(r => r.json()),
         fetch("/api/analytics").then(r => r.json()),
+        fetch("/api/positions").then(r => r.json()),
+        fetch("/api/equity_curve").then(r => r.json()),
       ]);
       document.getElementById("balance").textContent = "$" + (status.balance_usdc || 0).toFixed(2);
       renderTrades(trades);
       renderMarket(market);
       renderAudit(audit);
       renderAnalytics(analytics);
+      renderPositions(positions);
+      renderEquityChart(equity);
     } catch (e) {}
   }, 4000);
 

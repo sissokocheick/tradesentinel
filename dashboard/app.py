@@ -15,9 +15,11 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+import io
+import csv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 log = logging.getLogger("dashboard")
@@ -186,6 +188,145 @@ async def get_analytics():
     }
 
 
+@app.get("/api/positions")
+async def get_positions():
+    trades = await get_trades()
+    market = await get_market()
+    
+    positions_map = {}
+    for t in trades:
+        sym = t.get("symbol")
+        if not sym:
+            continue
+        entry = float(t.get("entry_price") or 0)
+        side = t.get("side", "BUY").upper()
+        if sym not in positions_map:
+            positions_map[sym] = {
+                "symbol": sym,
+                "total_cost": 0.0,
+                "trades_count": 0,
+                "last_side": side,
+                "last_entry": entry,
+                "strategy": t.get("strategy", "mean_reversion")
+            }
+        positions_map[sym]["total_cost"] += entry
+        positions_map[sym]["trades_count"] += 1
+        positions_map[sym]["last_entry"] = entry
+        positions_map[sym]["last_side"] = side
+        
+    result = []
+    for sym, pos in positions_map.items():
+        avg_entry = pos["total_cost"] / pos["trades_count"] if pos["trades_count"] > 0 else pos["last_entry"]
+        cur_price = avg_entry
+        if sym in market and "price" in market[sym]:
+            try:
+                cur_price = float(market[sym]["price"])
+            except Exception:
+                pass
+                
+        pnl_pct = ((cur_price - avg_entry) / avg_entry) * 100.0 if avg_entry > 0 else 0.0
+        result.append({
+            "symbol": sym,
+            "side": "LONG",
+            "avg_entry": round(avg_entry, 4 if ("USDT" in sym and avg_entry < 10) else 2),
+            "current_price": round(cur_price, 4 if ("USDT" in sym and cur_price < 10) else 2),
+            "pnl_pct": round(pnl_pct, 2),
+            "trades_count": pos["trades_count"],
+            "strategy": pos["strategy"],
+            "status": "PROFIT" if pnl_pct >= 0 else "DEFENSE"
+        })
+    return result
+
+
+@app.get("/api/equity_curve")
+async def get_equity_curve():
+    trades = await get_trades()
+    market = await get_market()
+    
+    points = []
+    cum_pnl_pct = 0.0
+    
+    for idx, t in enumerate(trades, start=1):
+        sym = t.get("symbol")
+        entry = float(t.get("entry_price") or 0)
+        side = t.get("side", "BUY").upper()
+        if not entry or not sym:
+            continue
+            
+        cur_price = entry
+        if sym in market and "price" in market[sym]:
+            try:
+                cur_price = float(market[sym]["price"])
+            except Exception:
+                pass
+                
+        diff = (cur_price - entry) if side == "BUY" else (entry - cur_price)
+        trade_pnl = (diff / entry) * 100.0 if entry > 0 else 0.0
+        cum_pnl_pct += trade_pnl
+        
+        points.append({
+            "step": idx,
+            "ts": t.get("ts", "")[11:16] if (t.get("ts") and len(t.get("ts")) >= 16) else f"#{idx}",
+            "symbol": sym,
+            "trade_pnl": round(trade_pnl, 2),
+            "cum_pnl": round(cum_pnl_pct, 2)
+        })
+        
+    return points
+
+
+@app.get("/api/export/csv")
+async def export_audit_csv():
+    if not AUDIT_LOG.exists():
+        return Response(content="No audit log available", media_type="text/plain")
+        
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Timestamp (UTC)",
+        "Trade ID",
+        "Event",
+        "Symbol",
+        "Side",
+        "Entry Price",
+        "Quantity USDC",
+        "Confidence (%)",
+        "Strategy",
+        "Rationale",
+        "Risk Decision"
+    ])
+    
+    for line in AUDIT_LOG.read_text(encoding="utf-8").strip().split("\n"):
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+            writer.writerow([
+                item.get("ts", ""),
+                item.get("trade_id", ""),
+                item.get("event", ""),
+                item.get("symbol", ""),
+                item.get("side", ""),
+                item.get("entry_price", ""),
+                item.get("quantity_usdc", ""),
+                item.get("confidence", ""),
+                item.get("strategy", ""),
+                item.get("rationale", ""),
+                item.get("assessment", {}).get("decision", "") if isinstance(item.get("assessment"), dict) else item.get("reason", "")
+            ])
+        except Exception:
+            pass
+            
+    csv_data = output.getvalue()
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=tradesentinel_audit_report.csv"
+        }
+    )
+
+
 @app.get("/api/decisions")
 async def get_decisions():
     return await get_audit(limit=20)
@@ -224,6 +365,8 @@ async def websocket_endpoint(ws: WebSocket):
         init_data["market_snapshots"] = await get_market()
         init_data["last_decisions"] = await get_decisions()
         init_data["analytics"] = await get_analytics()
+        init_data["positions"] = await get_positions()
+        init_data["equity_curve"] = await get_equity_curve()
         await ws.send_json({"type": "init", "data": init_data})
         while True:
             # Keep alive ping
