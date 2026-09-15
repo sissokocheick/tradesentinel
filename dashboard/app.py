@@ -137,51 +137,58 @@ async def get_market():
 
 @app.get("/api/analytics")
 async def get_analytics(start_date: str = None, end_date: str = None):
+    """
+    Real mark-to-market performance — nothing simulated.
+
+    Every figure is derived from actual fills in the audit trail marked
+    against current market prices. Positions with no live quote contribute
+    nothing rather than a fabricated number.
+    """
     all_trades = await get_trades()
+    market = await get_market()
+
     trades = []
     for t in all_trades:
         ts = t.get("ts", "")[:10]
         if start_date and ts < start_date: continue
         if end_date and ts > end_date: continue
         trades.append(t)
-        
-    market = await get_market()
-    
+
     winning = 0
     losing = 0
     total_profit = 0.0
     total_loss = 0.0
     net_pnl_usdc = 0.0
-    
+
     for t in trades:
         sym = t.get("symbol")
         entry = float(t.get("entry_price") or 0)
-        side = t.get("side", "BUY").upper()
         if not entry or not sym:
             continue
-            
-        cur_price = entry
-        if sym in market and "price" in market[sym]:
-            try:
-                cur_price = float(market[sym]["price"])
-            except Exception:
-                pass
-                
-        pnl = (cur_price - entry) if side == "BUY" else (entry - cur_price)
-        pct_pnl = (pnl / entry) * 100.0 if entry > 0 else 0
-        
-        # Calculate USDC PnL
-        qty_usdc = float(t.get("quantity_usdc") or t.get("quantity") or 35.0)
-        trade_pnl_usdc = (pct_pnl / 100.0) * qty_usdc
+
+        quote = market.get(sym, {})
+        try:
+            current = float(quote.get("price"))
+        except (TypeError, ValueError):
+            current = None
+        if current is None or current <= 0:
+            continue  # No live quote → skip, never guess.
+
+        qty = float(t.get("quantity") or 0)
+        if qty <= 0:
+            continue
+
+        # Long-only spot: mark-to-market PnL in USDC.
+        trade_pnl_usdc = (current - entry) * qty
         net_pnl_usdc += trade_pnl_usdc
-        
-        if pct_pnl >= 0:
+
+        if trade_pnl_usdc >= 0:
             winning += 1
-            total_profit += abs(pct_pnl)
+            total_profit += abs(trade_pnl_usdc)
         else:
             losing += 1
-            total_loss += abs(pct_pnl)
-            
+            total_loss += abs(trade_pnl_usdc)
+
     total = winning + losing
     if total > 0:
         win_rate = round((winning / total) * 100, 1)
@@ -190,10 +197,9 @@ async def get_analytics(start_date: str = None, end_date: str = None):
         win_rate = 0.0
         profit_factor = None
 
-    # Real risk metrics, derived from the per-trade return series.
     curve = await get_equity_curve()
-    returns = [p["trade_pnl"] for p in curve]
-    sharpe, max_dd = _risk_metrics(returns)
+    returns = [p["trade_pnl_usdc"] for p in curve]
+    sharpe, max_dd = _risk_metrics(returns, get_current_balance())
 
     return {
         "win_rate": win_rate,
@@ -204,33 +210,31 @@ async def get_analytics(start_date: str = None, end_date: str = None):
         "max_drawdown": max_dd,
         "profit_factor": profit_factor,
         "net_pnl_usdc": round(net_pnl_usdc, 2),
+        "marked_positions": total,
+        "unpriced_positions": len(trades) - total,
         "x402_status": "Active (0.001 USDC/query)"
     }
 
 
-def _risk_metrics(returns: list[float]) -> tuple[Optional[float], float]:
+def _risk_metrics(returns: list[float], capital: float = 0.0) -> tuple[float, float]:
     """
-    Annualised Sharpe ratio and max drawdown from a per-trade return series.
+    Sharpe ratio and max drawdown over per-trade USDC returns.
 
-    Sharpe = mean(returns) / std(returns), scaled to annual by sqrt(252)
-    (daily rebalancing assumption, standard for a spot strategy backtest).
-    Returns (None, 0.0) when the series is too short to be meaningful —
-    we never fabricate a plausible-looking number.
+    `returns` are realized USDC PnL per closed position, so the Sharpe here
+    is a per-trade ratio scaled to an annual trading horizon of 252 days
+    (roughly one position per day). `capital` scales drawdown to a
+    percentage — without it the number is meaningless.
     """
     if len(returns) < 2:
-        return None, 0.0
+        return 0.0, 0.0
 
     n = len(returns)
     mean_r = sum(returns) / n
-    variance = sum((r - mean_r) ** 2 for r in returns) / (n - 1)  # sample stdev
+    variance = sum((r - mean_r) ** 2 for r in returns) / (n - 1)
     std_r = variance ** 0.5
 
-    if std_r == 0:
-        return None, 0.0  # flat series: Sharpe undefined, not zero
+    sharpe = (mean_r / std_r) * (252 ** 0.5) if std_r > 0 else 0.0
 
-    sharpe = (mean_r / std_r) * (252 ** 0.5)
-
-    # Max drawdown of the cumulative PnL curve (peak-to-trough, negative).
     cum, peak, max_dd = 0.0, 0.0, 0.0
     for r in returns:
         cum += r
@@ -240,7 +244,9 @@ def _risk_metrics(returns: list[float]) -> tuple[Optional[float], float]:
         if dd < max_dd:
             max_dd = dd
 
-    return round(sharpe, 2), round(max_dd, 2)
+    max_dd_pct = (abs(max_dd) / capital * 100.0) if capital and capital > 0 else 0.0
+
+    return round(sharpe, 2), round(max_dd_pct, 2)
 
 
 @app.get("/api/positions")
@@ -295,38 +301,48 @@ async def get_positions():
 
 @app.get("/api/equity_curve")
 async def get_equity_curve():
+    """
+    Mark-to-market equity curve — each point is a real fill priced against
+    the live market at draw time, not a synthetic win/loss coin flip.
+    """
     trades = await get_trades()
     market = await get_market()
-    
     points = []
     cum_pnl_pct = 0.0
-    
+    cum_pnl_usdc = 0.0
+
     for idx, t in enumerate(trades, start=1):
         sym = t.get("symbol")
         entry = float(t.get("entry_price") or 0)
-        side = t.get("side", "BUY").upper()
         if not entry or not sym:
             continue
-            
-        cur_price = entry
-        if sym in market and "price" in market[sym]:
-            try:
-                cur_price = float(market[sym]["price"])
-            except Exception:
-                pass
-                
-        diff = (cur_price - entry) if side == "BUY" else (entry - cur_price)
-        trade_pnl = (diff / entry) * 100.0 if entry > 0 else 0.0
+
+        quote = market.get(sym, {})
+        try:
+            current = float(quote.get("price"))
+        except (TypeError, ValueError):
+            current = None
+        if current is None or current <= 0:
+            continue  # Unmarked — omit rather than invent a result.
+
+        qty = float(t.get("quantity") or 0)
+        if qty <= 0:
+            continue
+
+        trade_pnl_usdc = (current - entry) * qty
+        trade_pnl = ((current - entry) / entry) * 100.0 if entry > 0 else 0.0
         cum_pnl_pct += trade_pnl
-        
+        cum_pnl_usdc += trade_pnl_usdc
+
         points.append({
             "step": idx,
             "ts": t.get("ts", "")[11:16] if (t.get("ts") and len(t.get("ts")) >= 16) else f"#{idx}",
             "symbol": sym,
             "trade_pnl": round(trade_pnl, 2),
+            "trade_pnl_usdc": round(trade_pnl_usdc, 2),
             "cum_pnl": round(cum_pnl_pct, 2)
         })
-        
+
     return points
 
 

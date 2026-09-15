@@ -174,8 +174,15 @@ class ExecutorAgent:
             return
 
         # 🛡️ Step 5: Place stop-loss & take-profit 🛡️
+        # An unprotected position is the main way this system loses money:
+        # a winner caps out at +4% but a loser can run indefinitely. If the
+        # OCO order is rejected, fall back to a bare stop-loss so the
+        # position is never left naked.
         if assessment.stop_loss_price and assessment.take_profit_price:
-            await self._place_oco_order(trade_id, intent, assessment, quantity)
+            armed = await self._place_oco_order(trade_id, intent, assessment, quantity)
+            if not armed:
+                log.warning(f"[{trade_id}] Falling back to standalone stop-loss.")
+                await self._place_stop_loss_only(trade_id, intent, assessment, quantity)
 
     def _get_precision(self, symbol: str) -> tuple[int, int]:
         """Returns (qty_decimals, price_decimals) for formatting."""
@@ -206,10 +213,51 @@ class ExecutorAgent:
                 stop_limit_price = sl_limit,
                 time_in_force = "GTC",
             )
-            log.info(f"[{trade_id}] 🎯 OCO armed: TP=${tp_price} | SL trigger=${sl_trigger} | limit=${sl_limit}")
+            log.info(f"[{trade_id}] 🎯 OCO armed: TP=${tp_price} | SL trigger=${sl_trigger} | limit={sl_limit}")
             self._audit(trade_id, "oco_set", intent, oco_order=oco_order)
+            return True
         except Exception as e:
+            # A failed stop-loss means the position is naked — record it so
+            # coverage is measurable instead of silently degrading.
             log.warning(f"[{trade_id}] OCO placement failed: {e}")
+            self._audit(trade_id, "oco_failed", intent,
+                        error=str(e),
+                        stop_loss_price=sl_trigger,
+                        take_profit_price=tp_price)
+            return False
+
+    async def _place_stop_loss_only(self, trade_id, intent, assessment, quantity):
+        """
+        Fallback protection when the OCO order is rejected by the exchange.
+
+        A take-profit is an upside convenience; a stop-loss is survival.
+        Capping the loss at STOP_LOSS_PCT is strictly better than letting an
+        open position run indefinitely against us.
+        """
+        sl_side = "SELL" if intent.side == "BUY" else "BUY"
+        qty_dec, price_dec = self._get_precision(intent.symbol)
+        sl_trigger = round(assessment.stop_loss_price, price_dec)
+        # 0.5% buffer so the limit fills when the stop triggers.
+        sl_limit = round(sl_trigger * (0.995 if sl_side == "SELL" else 1.005), price_dec)
+
+        try:
+            sl_order = await self.mcp.place_stop_loss_order(
+                symbol        = intent.symbol,
+                side          = sl_side,
+                quantity      = quantity,
+                stop_price    = sl_trigger,
+                limit_price   = sl_limit,
+                time_in_force = "GTC",
+            )
+            log.info(f"[{trade_id}] 🛡️ Fallback stop-loss armed @ ${sl_trigger}")
+            self._audit(trade_id, "stop_loss_set", intent,
+                        stop_loss_price=sl_trigger, sl_order=sl_order)
+        except Exception as e:
+            # Nothing left to protect the position — this is the worst-case
+            # state, so it is logged at ERROR and recorded in the audit trail.
+            log.error(f"[{trade_id}] CRITICAL — position unprotected: {e}")
+            self._audit(trade_id, "protection_failed", intent,
+                        error=str(e), stop_loss_price=sl_trigger)
 
     # ── Human approval flow ──────────────────────────────────
 
