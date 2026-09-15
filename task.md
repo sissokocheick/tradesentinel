@@ -23,8 +23,15 @@
 - [x] `requirements.txt` + `Dockerfile` + `docker-compose.yml`
 - [x] Intégration Google Gemini 2.5 Flash opérationnelle (testée end-to-end)
 - [x] Test complet en mode `--demo --dashboard` validé avec succès
-- [ ] Créer le repo GitHub PUBLIC
+- [x] **Repo GitHub PUBLIC créé** — https://github.com/sissokocheick/tradesentinel
+- [x] **Hardening de la rentabilité (session du 2026-09-15)**
+  - [x] Stop-loss de secours : une position n'est **jamais** laissée nue
+  - [x] P&L réel mark-to-market (suppression de la simulation MD5)
+  - [x] Sharpe / drawdown sur capital réel (suppression des constantes 397460.99 / 2.42)
+  - [x] Funding rate corrigé (`BTCUSDT_PERP` → `BTCUSDT`)
+  - [x] Test de régression `test_protection.py` — 4/4 PASS
 - [ ] Remplir le `.env` avec les vraies clés Binance Agent OS
+- [ ] **Révoquer la clé API en clair dans `api test .txt`** (toujours en attente)
 - [ ] Enregistrer la vidéo démo (5–7 min)
 - [ ] Poster sur Twitter/X avec la vidéo + GitHub
 - [ ] Compléter le survey Binance
