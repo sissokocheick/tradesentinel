@@ -118,13 +118,15 @@ class ScoutAgent:
 
         # Funding rate (best-effort, futures only)
         # GET /fapi/v1/fundingRate returns an ARRAY — take the latest entry.
+        # Binance futures symbols are unprefixed (BTCUSDT, not BTCUSDT_PERP);
+        # the _PERP suffix returns an empty array and silently drops the rate.
         funding_rate = None
         try:
-            fr_data = await self.mcp.get_funding_rate(symbol.replace("USDT", "USDT_PERP"))
+            fr_data = await self.mcp.get_funding_rate(symbol)
             if isinstance(fr_data, list) and fr_data:
-                funding_rate = float(fr_data[-1].get("lastFundingRate", 0))
+                funding_rate = float(fr_data[-1].get("fundingRate", 0))
             elif isinstance(fr_data, dict):
-                funding_rate = float(fr_data.get("lastFundingRate", 0))
+                funding_rate = float(fr_data.get("fundingRate", 0))
         except Exception:
             pass
 

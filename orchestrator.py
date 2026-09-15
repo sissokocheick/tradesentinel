@@ -172,6 +172,16 @@ class TradeSentinelOrchestrator:
                 "ts": datetime.now(timezone.utc).isoformat(),
             }
 
+        async def mock_oco_order(**kwargs):
+            # Demonstrate the full safety chain arming in demo mode.
+            print(f"[DEMO] OCO armed: TP=${kwargs.get('price')} "
+                  f"SL=${kwargs.get('stop_price')}")
+            return {"status": "NEW", "orderId": "DEMO-OCO-1"}
+
+        async def mock_stop_loss_order(**kwargs):
+            print(f"[DEMO] Stop-loss armed @ ${kwargs.get('stop_price')}")
+            return {"status": "NEW", "orderId": "DEMO-SL-1"}
+
         async def mock_total_balance():
             return 250.00
 
@@ -179,8 +189,10 @@ class TradeSentinelOrchestrator:
             print(f"\n[DEMO AUTO-APPROVED] Guardrails passed -> Executing {intent.side} {intent.symbol} (~${intent.quantity_usdc:.2f} USDC)")
             return True
 
-        self.mcp.place_market_order = mock_order
-        self.mcp.place_limit_order  = mock_order
+        self.mcp.place_market_order    = mock_order
+        self.mcp.place_limit_order     = mock_order
+        self.mcp.place_oco_order       = mock_oco_order
+        self.mcp.place_stop_loss_order = mock_stop_loss_order
         self.wallet.get_total_usdc_value = mock_total_balance
         self.executor._human_cb = mock_auto_approve
         log.info("DEMO MODE - orders simulated, auto-approval active, balance: $250.00 USDC")
