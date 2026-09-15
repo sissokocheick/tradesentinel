@@ -69,16 +69,38 @@ class RiskManager:
         self._open_positions: dict[str, dict] = {}  # symbol → position info
         self._session_start_balance: Optional[float] = None
         self._peak_balance: Optional[float] = None
+        self._current_balance: Optional[float] = None
+        self._halted = False   # Latched once max drawdown is breached
 
     def set_session_balance(self, balance_usdc: float):
         """Call once at startup with the Agentic account balance."""
         self._session_start_balance = balance_usdc
         self._peak_balance = balance_usdc
+        self._current_balance = balance_usdc
         log.info(f"Risk Manager initialized | Session balance: ${balance_usdc:.2f} USDC")
 
     def update_balance(self, current_balance: float):
+        """
+        Feed the live account balance after every trade cycle.
+        Updates the high-water mark used for drawdown computation.
+        """
+        if current_balance is None or current_balance < 0:
+            return
+        self._current_balance = current_balance
         if self._peak_balance is None or current_balance > self._peak_balance:
             self._peak_balance = current_balance
+
+    def current_drawdown_pct(self) -> Optional[float]:
+        """Drawdown from the session high-water mark, as a positive percentage."""
+        if self._peak_balance is None or self._current_balance is None:
+            return None
+        if self._peak_balance <= 0:
+            return None
+        return ((self._peak_balance - self._current_balance) / self._peak_balance) * 100.0
+
+    def is_halted(self) -> bool:
+        """True once the max drawdown guardrail has tripped (latched)."""
+        return self._halted
 
     def assess(self, intent: TradeIntent) -> RiskAssessment:
         """Run all risk checks. Returns an assessment with the final decision."""
@@ -112,18 +134,34 @@ class RiskManager:
                 reason=f"Max open positions ({MAX_OPEN_POSITIONS}) already held."
             )
 
+        if intent.side == "SELL":
+            return RiskAssessment(
+                decision=RiskDecision.REJECTED,
+                reason="Spot constraint: Exits are strictly managed by automated SL/TP orders."
+            )
+
         # 5. Max position size
         approved_qty_usdc = min(intent.quantity_usdc, MAX_POSITION_SIZE_USDC)
         if approved_qty_usdc < intent.quantity_usdc:
             log.warning(f"Position size reduced from ${intent.quantity_usdc:.2f} → ${approved_qty_usdc:.2f}")
 
-        # 6. Drawdown check
-        if self._peak_balance is not None:
-            drawdown = ((self._peak_balance - self._peak_balance) / self._peak_balance) * 100
+        # 6. Drawdown check — distance from the session high-water mark
+        drawdown = self.current_drawdown_pct()
+        if drawdown is not None:
             if drawdown >= MAX_DRAWDOWN_PCT:
+                self._halted = True
                 return RiskAssessment(
                     decision=RiskDecision.REJECTED,
-                    reason=f"Max drawdown {MAX_DRAWDOWN_PCT}% reached. Trading halted."
+                    reason=(
+                        f"Max drawdown reached: {drawdown:.2f}% ≥ {MAX_DRAWDOWN_PCT}% "
+                        f"(peak ${self._peak_balance:.2f} → now ${self._current_balance:.2f}). Trading halted."
+                    ),
+                )
+            if self._halted:
+                # Latched: requires an explicit reset (new session) to resume.
+                return RiskAssessment(
+                    decision=RiskDecision.REJECTED,
+                    reason=f"Trading halted after drawdown breach ({drawdown:.2f}%). Manual reset required.",
                 )
 
         # 7. Compute stop-loss & take-profit
@@ -170,6 +208,7 @@ class RiskManager:
             del self._open_positions[symbol]
 
     def get_risk_summary(self) -> dict:
+        drawdown = self.current_drawdown_pct()
         return {
             "hourly_trades": self._hourly_trade_count,
             "max_hourly_trades": MAX_TRADES_PER_HOUR,
@@ -177,6 +216,10 @@ class RiskManager:
             "max_open_positions": MAX_OPEN_POSITIONS,
             "session_start_balance": self._session_start_balance,
             "peak_balance": self._peak_balance,
+            "current_balance": self._current_balance,
+            "current_drawdown_pct": round(drawdown, 2) if drawdown is not None else None,
+            "max_drawdown_pct": MAX_DRAWDOWN_PCT,
+            "halted": self._halted,
             "limits": {
                 "max_position_usdc": MAX_POSITION_SIZE_USDC,
                 "max_drawdown_pct": MAX_DRAWDOWN_PCT,

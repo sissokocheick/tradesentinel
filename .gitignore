@@ -1,5 +1,60 @@
+# ── Secrets & credentials ────────────────────────────────
 .env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+api test .txt
+**/api test .txt
+**/*apikey*.txt
+**/*secret*.txt
+
+# ── Python ───────────────────────────────────────────────
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# ── Logs & runtime state (audit trail stays, PII-free) ──
 logs/*.json
+logs/*.log
 *.log
+
+# ── Heavy binaries / demo media — host externally ──────
+# Repo stays under 100 MB; videos belong on YouTube/Vimeo
+*.exe
+*.msi
+*.winmd
+*.dll
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.aac
+*.wav
+*.mp3
+*.pdf
+voiceover_segments/
+
+# ── Exported audit data (contains full trade history) ───
+tradesentinel_audit_report.csv
+*_audit_report.csv
+
+# ── OS / editor cruft ────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Keep the dashboard screenshot for the README ────────
+!dashboard_preview.png

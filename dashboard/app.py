@@ -14,6 +14,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import io
 import csv
@@ -95,12 +96,16 @@ async def get_trades():
         try:
             item = json.loads(line)
             if item.get("event") == "order_placed":
+                order = item.get("order") or {}
                 trades.append({
                     "id": item.get("trade_id", "t-1"),
                     "symbol": item.get("symbol", ""),
                     "side": item.get("side", ""),
-                    "entry_price": float(item.get("entry_price") or item.get("order", {}).get("price") or item.get("price") or 0.0),
-                    "quantity": item.get("quantity", 0),
+                    "entry_price": float(item.get("entry_price") or 0.0),
+                    # Filled quantity as reported by the exchange; fall back to
+                    # the intended USDC notional when the fill detail is absent.
+                    "quantity": float(order.get("executedQty") or order.get("quantity") or 0),
+                    "quantity_usdc": float(item.get("quantity_usdc") or 0),
                     "strategy": item.get("strategy", "momentum"),
                     "ts": item.get("ts", ""),
                 })
@@ -131,14 +136,22 @@ async def get_market():
 
 
 @app.get("/api/analytics")
-async def get_analytics():
-    trades = await get_trades()
+async def get_analytics(start_date: str = None, end_date: str = None):
+    all_trades = await get_trades()
+    trades = []
+    for t in all_trades:
+        ts = t.get("ts", "")[:10]
+        if start_date and ts < start_date: continue
+        if end_date and ts > end_date: continue
+        trades.append(t)
+        
     market = await get_market()
     
     winning = 0
     losing = 0
     total_profit = 0.0
     total_loss = 0.0
+    net_pnl_usdc = 0.0
     
     for t in trades:
         sym = t.get("symbol")
@@ -157,6 +170,11 @@ async def get_analytics():
         pnl = (cur_price - entry) if side == "BUY" else (entry - cur_price)
         pct_pnl = (pnl / entry) * 100.0 if entry > 0 else 0
         
+        # Calculate USDC PnL
+        qty_usdc = float(t.get("quantity_usdc") or t.get("quantity") or 35.0)
+        trade_pnl_usdc = (pct_pnl / 100.0) * qty_usdc
+        net_pnl_usdc += trade_pnl_usdc
+        
         if pct_pnl >= 0:
             winning += 1
             total_profit += abs(pct_pnl)
@@ -167,15 +185,16 @@ async def get_analytics():
     total = winning + losing
     if total > 0:
         win_rate = round((winning / total) * 100, 1)
-        profit_factor = round(total_profit / total_loss, 2) if total_loss > 0 else (2.40 if total_profit > 0 else 1.0)
+        profit_factor = round(total_profit / total_loss, 2) if total_loss > 0 else (None if total_profit == 0 else float('inf'))
     else:
-        win_rate = 71.4  # Historical benchmark baseline
-        profit_factor = 2.15
-        
-    # Standard Sharpe ratio estimate based on low-volatility mean reversion profile
-    sharpe = 2.42 if win_rate >= 65 else 1.85
-    max_dd = -1.45 if total > 0 else -1.20
-    
+        win_rate = 0.0
+        profit_factor = None
+
+    # Real risk metrics, derived from the per-trade return series.
+    curve = await get_equity_curve()
+    returns = [p["trade_pnl"] for p in curve]
+    sharpe, max_dd = _risk_metrics(returns)
+
     return {
         "win_rate": win_rate,
         "winning_trades": winning,
@@ -184,8 +203,44 @@ async def get_analytics():
         "sharpe_ratio": sharpe,
         "max_drawdown": max_dd,
         "profit_factor": profit_factor,
+        "net_pnl_usdc": round(net_pnl_usdc, 2),
         "x402_status": "Active (0.001 USDC/query)"
     }
+
+
+def _risk_metrics(returns: list[float]) -> tuple[Optional[float], float]:
+    """
+    Annualised Sharpe ratio and max drawdown from a per-trade return series.
+
+    Sharpe = mean(returns) / std(returns), scaled to annual by sqrt(252)
+    (daily rebalancing assumption, standard for a spot strategy backtest).
+    Returns (None, 0.0) when the series is too short to be meaningful —
+    we never fabricate a plausible-looking number.
+    """
+    if len(returns) < 2:
+        return None, 0.0
+
+    n = len(returns)
+    mean_r = sum(returns) / n
+    variance = sum((r - mean_r) ** 2 for r in returns) / (n - 1)  # sample stdev
+    std_r = variance ** 0.5
+
+    if std_r == 0:
+        return None, 0.0  # flat series: Sharpe undefined, not zero
+
+    sharpe = (mean_r / std_r) * (252 ** 0.5)
+
+    # Max drawdown of the cumulative PnL curve (peak-to-trough, negative).
+    cum, peak, max_dd = 0.0, 0.0, 0.0
+    for r in returns:
+        cum += r
+        if cum > peak:
+            peak = cum
+        dd = cum - peak
+        if dd < max_dd:
+            max_dd = dd
+
+    return round(sharpe, 2), round(max_dd, 2)
 
 
 @app.get("/api/positions")
@@ -227,7 +282,7 @@ async def get_positions():
         pnl_pct = ((cur_price - avg_entry) / avg_entry) * 100.0 if avg_entry > 0 else 0.0
         result.append({
             "symbol": sym,
-            "side": "LONG",
+            "side": pos["last_side"] or "LONG",
             "avg_entry": round(avg_entry, 4 if ("USDT" in sym and avg_entry < 10) else 2),
             "current_price": round(cur_price, 4 if ("USDT" in sym and cur_price < 10) else 2),
             "pnl_pct": round(pnl_pct, 2),
@@ -345,6 +400,18 @@ async def get_audit(limit: int = 50):
         except Exception:
             pass
     return list(reversed(entries))
+
+
+@app.get("/api/audit/verify")
+async def verify_audit():
+    """
+    Cryptographic integrity check of the audit trail.
+
+    Recomputes the SHA-256 hash chain end-to-end. Any retroactive edit,
+    deletion, or insertion breaks the chain and is reported here.
+    """
+    from agents.executor_agent import verify_audit_trail
+    return verify_audit_trail(AUDIT_LOG)
 
 
 # ── WebSocket — real-time feed ────────────────────────────────

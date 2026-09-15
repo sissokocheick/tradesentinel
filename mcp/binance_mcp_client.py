@@ -178,6 +178,28 @@ class BinanceMCPClient:
         }
         return await self._call("order", payload, signed=True, method="POST")
 
+    async def place_oco_order(
+        self,
+        symbol:        str,
+        side:          str,
+        quantity:      float,
+        price:         float,
+        stop_price:    float,
+        stop_limit_price: Optional[float] = None,
+        time_in_force: str = "GTC"
+    ) -> dict:
+        stop_limit_price = stop_limit_price or stop_price
+        payload = {
+            "symbol":      symbol,
+            "side":        side,
+            "quantity":    str(quantity),
+            "price":       str(price),
+            "stopPrice":   str(stop_price),
+            "stopLimitPrice": str(stop_limit_price),
+            "stopLimitTimeInForce": time_in_force,
+        }
+        return await self._call("order/oco", payload, signed=True, method="POST")
+
     async def cancel_order(self, symbol: str, order_id: str) -> dict:
         return await self._call("order", {"symbol": symbol, "orderId": order_id}, signed=True, method="DELETE")
 

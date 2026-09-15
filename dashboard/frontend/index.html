@@ -7,6 +7,9 @@
   <link rel="icon" type="image/svg+xml" href="/logo.svg" />
   <link rel="apple-touch-icon" href="/logo.svg" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/dark.css">
+  <script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
   <style>
     :root {
       --bg: #0d1117;
@@ -204,13 +207,21 @@
 
   <!-- Hedge Fund Performance & Risk Analytics -->
   <div class="card" style="grid-column: span 3; background: linear-gradient(135deg, rgba(240, 185, 11, 0.05) 0%, rgba(14, 203, 129, 0.04) 100%); border-color: rgba(240, 185, 11, 0.25);">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
-      <h2 style="color: var(--accent); margin-bottom: 0;">📊 Hedge Fund Performance & Risk Analytics</h2>
-      <span style="font-size: 0.72rem; color: var(--accent); border: 1px solid rgba(240, 185, 11, 0.4); padding: 3px 8px; border-radius: 6px; font-weight: 600; text-transform: uppercase;">Institutional Grade</span>
-    </div>
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px;">
-      <div style="background: var(--bg); padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border);">
-        <div style="font-size: 0.75rem; color: var(--muted); margin-bottom: 4px;">Win Rate</div>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+        <h2 style="color: var(--accent); margin-bottom: 0;">📊 Hedge Fund Performance & Risk Analytics</h2>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <input type="text" id="dateRangePicker" placeholder="Select period..." style="background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; cursor: pointer; width: 210px; text-align: center; font-size: 0.85rem;">
+            <span style="font-size: 0.72rem; color: var(--accent); border: 1px solid rgba(240, 185, 11, 0.4); padding: 3px 8px; border-radius: 6px; font-weight: 600; text-transform: uppercase;">Institutional Grade</span>
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 14px;">
+        <div style="background: var(--bg); padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border);">
+          <div style="font-size: 0.75rem; color: var(--muted); margin-bottom: 4px;">Net Profit (USDC)</div>
+          <div style="font-size: 1.45rem; font-weight: 700; color: var(--green);" id="netPnl">+$0.00</div>
+          <div style="font-size: 0.7rem; color: var(--muted);">Realized & Unrealized PnL</div>
+        </div>
+        <div style="background: var(--bg); padding: 12px 14px; border-radius: 8px; border: 1px solid var(--border);">
+          <div style="font-size: 0.75rem; color: var(--muted); margin-bottom: 4px;">Win Rate</div>
         <div style="font-size: 1.45rem; font-weight: 700; color: var(--green);" id="winRate">--%</div>
         <div style="font-size: 0.7rem; color: var(--muted);" id="winRateSub">Analyzing fills...</div>
       </div>
@@ -474,6 +485,11 @@
 
   function renderAnalytics(data) {
     if (!data) return;
+    if (data.net_pnl_usdc !== undefined) {
+      const pnlEl = document.getElementById('netPnl');
+      pnlEl.textContent = (data.net_pnl_usdc >= 0 ? '+' : '') + '$' + data.net_pnl_usdc.toFixed(2);
+      pnlEl.style.color = data.net_pnl_usdc >= 0 ? 'var(--green)' : 'var(--red)';
+    }
     if (data.win_rate !== undefined) {
       document.getElementById("winRate").textContent = `${data.win_rate}%`;
       const winText = data.total_trades > 0 
@@ -500,7 +516,7 @@
         fetch("/api/trades").then(r => r.json()),
         fetch("/api/market").then(r => r.json()),
         fetch("/api/audit?limit=20").then(r => r.json()),
-        fetch("/api/analytics").then(r => r.json()),
+        fetch(`/api/analytics?start_date=${fpStart}&end_date=${fpEnd}`).then(r => r.json()),
         fetch("/api/positions").then(r => r.json()),
         fetch("/api/equity_curve").then(r => r.json()),
       ]);
@@ -522,6 +538,52 @@
     // Keep max 100 lines
     while (el.children.length > 100) el.removeChild(el.firstChild);
   }
+
+  let fpStart = "";
+  let fpEnd = "";
+
+  async function fetchFilteredAnalytics() {
+    try {
+      const res = await fetch(`/api/analytics?start_date=${fpStart}&end_date=${fpEnd}`);
+      const data = await res.json();
+      
+      // Update Net PnL
+      const pnlEl = document.getElementById('netPnl');
+      pnlEl.textContent = (data.net_pnl_usdc >= 0 ? '+' : '') + '$' + data.net_pnl_usdc.toFixed(2);
+      pnlEl.style.color = data.net_pnl_usdc >= 0 ? 'var(--green)' : 'var(--red)';
+      
+      // Update other metrics
+      document.getElementById('winRate').textContent = data.win_rate + '%';
+      document.getElementById('winRateSub').textContent = `${data.winning_trades} / ${data.total_trades} profitable fills`;
+      document.getElementById('sharpeRatio').textContent = data.sharpe_ratio;
+      document.getElementById('maxDrawdown').textContent = data.max_drawdown + '%';
+      document.getElementById('profitFactor').textContent = data.profit_factor;
+    } catch (e) {
+      console.error("Failed to fetch filtered analytics", e);
+    }
+  }
+
+  // Initialize Flatpickr Date Range
+  flatpickr("#dateRangePicker", {
+    mode: "range",
+    dateFormat: "Y-m-d",
+    showMonths: 2,
+    maxDate: "today",
+    onChange: function(selectedDates, dateStr, instance) {
+      if (selectedDates.length === 2) {
+        fpStart = flatpickr.formatDate(selectedDates[0], "Y-m-d");
+        fpEnd = flatpickr.formatDate(selectedDates[1], "Y-m-d");
+        fetchFilteredAnalytics();
+      } else if (selectedDates.length === 0) {
+        fpStart = "";
+        fpEnd = "";
+        fetchFilteredAnalytics();
+      }
+    }
+  });
+
+  // Auto-fetch on initial load
+  setTimeout(fetchFilteredAnalytics, 1000);
 
   connect();
 </script>

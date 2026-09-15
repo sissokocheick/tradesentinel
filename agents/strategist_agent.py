@@ -17,15 +17,26 @@ from skills.risk_manager import TradeIntent
 
 log = logging.getLogger("strategist")
 
+# Shared hash-chained audit logger (module-level so every decision links into
+# the same chain the Executor uses).
+from agents.executor_agent import AuditLogger  # noqa: E402
+_audit = AuditLogger()
+
 # ── Google Gemini / Gemma config ──────────────────────────────
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL   = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")
-CANDIDATE_MODELS = [
-    GEMINI_MODEL,
-    "gemini-flash-lite-latest",
-    "gemma-4-26b-a4b-it",
-    "gemma-4-31b-it",
-]
+
+def _build_candidate_models() -> list[str]:
+    """Ordered model list, deduplicated so a rate-limited model is never retried twice."""
+    order = [GEMINI_MODEL, "gemini-flash-lite-latest", "gemma-4-31b-it"]
+    seen, out = set(), []
+    for m in order:
+        if m and m not in seen:
+            seen.add(m)
+            out.append(m)
+    return out
+
+CANDIDATE_MODELS = _build_candidate_models()
 
 
 SYSTEM_PROMPT = """
@@ -35,17 +46,18 @@ Your role: analyze real-time Binance market snapshots (price, 24h change, RSI, M
 
 Rules you MUST follow:
 1. Actively evaluate trade opportunities using 3 core strategies:
-   - "momentum": Strong 24h trend (+/- 1.5%) supported by MACD and order book flow.
-   - "mean_reversion": RSI > 70 (overbought, potential SELL) or RSI < 35 (oversold, potential BUY).
-   - "breakout": Price testing 24h highs/lows with significant Order Book Imbalance.
-2. When indicators align with one of these strategies, assign action "BUY" or "SELL" with confidence between 68% and 88%.
-3. If signals are genuinely flat or completely conflicting, assign action "HOLD" with confidence < 60%.
+   - "momentum": Strong 24h trend (+/- 1.5%) supported by MACD crossover and order book flow.
+   - "mean_reversion": RSI < 35 (oversold, potential BUY). Overbought conditions (RSI > 70) are NOT actionable here — read rule 3.
+   - "breakout": Price testing 24h highs with significant Order Book Imbalance (buy pressure).
+2. When indicators align, assign action "BUY" with confidence between 68% and 88%.
+3. This system trades LONG ONLY on spot. Exits are handled automatically by OCO stop-loss / take-profit orders placed by the Executor, so you must NEVER emit "SELL". When you detect weakness, overbought conditions, or conflicting signals, emit "HOLD" with confidence < 60%.
 4. Position size must be between $15 and $40 USDC.
-5. Output valid JSON only. No markdown fences, no conversational text.
+5. Only suggest "BUY" when confidence is at least 65%; lower-conviction setups should be "HOLD".
+6. Output valid JSON only. No markdown fences, no conversational text.
 
 Output format (strict JSON):
 {
-  "action": "BUY" | "SELL" | "HOLD",
+  "action": "BUY" | "HOLD",
   "symbol": "BTCUSDT",
   "strategy_name": "momentum" | "mean_reversion" | "breakout",
   "confidence": 75,
@@ -121,20 +133,19 @@ class StrategistAgent:
         if len(self._memory) > 20:
             self._memory.pop(0)
 
-        # Log evaluation to audit trail
+        # Log evaluation to the shared hash-chained audit trail
         try:
-            audit_entry = {
-                "trade_id": f"eval-{snap.symbol}",
-                "event": "market_analysis" if action != "HOLD" else "market_hold",
-                "ts": datetime.now(timezone.utc).isoformat(),
-                "symbol": snap.symbol,
-                "side": action,
-                "confidence": decision.get("confidence", 0),
-                "strategy": decision.get("strategy_name", "analysis"),
-                "rationale": decision.get("rationale", ""),
-            }
-            with open("logs/audit_trail.json", "a", encoding="utf-8") as f:
-                f.write(json.dumps(audit_entry) + "\n")
+            from agents.executor_agent import AuditLogger
+            _audit.append(
+                trade_id=f"eval-{snap.symbol}",
+                event="market_analysis" if action != "HOLD" else "market_hold",
+                ts=datetime.now(timezone.utc).isoformat(),
+                symbol=snap.symbol,
+                side=action,
+                confidence=decision.get("confidence", 0),
+                strategy=decision.get("strategy_name", "analysis"),
+                rationale=decision.get("rationale", ""),
+            )
         except Exception as e:
             log.warning(f"Audit log write failed: {e}")
 
@@ -192,18 +203,29 @@ class StrategistAgent:
 
         # Try models in priority order
         for model in CANDIDATE_MODELS:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
             try:
                 import httpx
                 async with httpx.AsyncClient(timeout=25.0) as client:
-                    resp = await client.post(url, json=payload)
+                    # Key travels in a header, never in the URL/query string,
+                    # so it cannot leak into logs or proxy captures.
+                    resp = await client.post(
+                        url,
+                        json=payload,
+                        headers={"x-goog-api-key": GEMINI_API_KEY},
+                    )
                     if resp.status_code == 200:
                         data = resp.json()
                         text = data["candidates"][0]["content"]["parts"][0]["text"]
                         return text
-                    elif resp.status_code in (429, 503, 404):
+                    elif resp.status_code in (429, 503):
+                        # Rate limited / temporarily unavailable — brief backoff.
                         log.info(f"Model {model} returned {resp.status_code}, switching to next candidate...")
-                        await asyncio.sleep(1.0)
+                        await asyncio.sleep(0.5)
+                        continue
+                    elif resp.status_code == 404:
+                        # Model does not exist for this key — skip instantly, no wait.
+                        log.info(f"Model {model} not available (404), skipping.")
                         continue
             except Exception as e:
                 log.warning(f"Model {model} request failed: {e}")

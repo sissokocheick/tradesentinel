@@ -40,24 +40,25 @@ Continuously polls the **Binance MCP Server** for:
 - Real-time price tickers for 5 major pairs
 - Order book depth & bid/ask spread
 - 24h volume, high/low
-- Computes RSI(14), MACD signal, Bollinger Band position
+- Computes **RSI(14) with Wilder smoothing**, **MACD** (EMA-12/26 with a 9-period signal line, crossover-graded), and Bollinger Band position
 - Calculates order book imbalance (buy/sell pressure)
 
 ### 🧠 Strategist Agent
 Receives structured market snapshots and:
 - Builds rich context prompts with **session memory** (last 20 decisions)
-- Calls Claude via API to generate structured `{action, symbol, confidence, rationale}` JSON
+- Calls **Google Gemini** (`gemini-2.0-flash` / Gemma fallbacks) to generate structured `{action, symbol, confidence, rationale}` JSON
 - Supports three strategies: **momentum**, **mean_reversion**, **breakout**
-- Only emits trade intents when `confidence ≥ 65%`
+- Long-only by design: exits are never LLM-driven, they are enforced by automated OCO orders (see Executor step 5)
+- Emits a trade intent only when the LLM's confidence clears the risk floor (`RISK_MIN_CONFIDENCE`, enforced by the Risk Manager)
 
 ### ⚡ Executor Agent
 The final safety gate before any real money moves:
-1. ✅ **Risk assessment** — 7 independent checks
-2. 🔔 **Human approval** — required for orders > $20 USDC
+1. ✅ **Risk assessment** — 7 independent checks (see below)
+2. 🔔 **Human approval** — required for orders > $20 USDC, fail-closed if no approver is wired
 3. 💸 **x402 micropayment** — pays for premium data
 4. 📤 **Order placement** — via Binance MCP on Agentic sub-account
-5. 🛡️ **Stop-loss setup** — auto-placed at entry
-6. 📋 **Audit log** — every decision written to `logs/audit_trail.json`
+5. 🛡️ **OCO stop-loss & take-profit** — armed automatically at entry
+6. 📋 **Hash-chained audit log** — every decision written to `logs/audit_trail.json`, each entry linked to the previous one by SHA-256 (see `/api/audit/verify`)
 
 ---
 
@@ -141,7 +142,8 @@ The dashboard provides real-time visibility into all agent activity:
 - 🤖 Per-agent status (Scout / Strategist / Executor)
 - 📈 Live market data (5 pairs from Binance MCP)
 - 🗂️ Trade history with strategy tags
-- 📋 Immutable audit trail (every decision logged)
+- 📊 Performance analytics — **win rate, profit factor, Sharpe ratio and max drawdown, all computed live from the actual trade history** (no hardcoded metrics)
+- 🔗 Audit integrity check — `/api/audit/verify` recomputes the hash chain and flags any tampering
 - 🖥️ Live system log
 
 ---
@@ -178,10 +180,12 @@ tradesentinel/
 ## 🔒 Security Notes
 
 - API keys are loaded from environment variables — never hardcoded
+- The Gemini API key is sent in a request **header**, never in the URL, so it cannot leak into logs or proxy captures
 - All agent activity is confined to the **Agentic sub-account** (isolated from main funds)
 - The MCP server does **not** support external withdrawals
-- Every decision is logged with a timestamp, rationale, and risk assessment
-- Human approval required for any order above $20 USDC
+- Every decision is logged with a timestamp, rationale, and risk assessment, then hash-chained so retroactive edits are detectable
+- Human approval required for any order above $20 USDC — and a missing approval callback **refuses** the trade rather than auto-approving it
+- Credentials, binaries and demo videos are git-ignored so they can never be pushed to the public repo
 
 ---
 

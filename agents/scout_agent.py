@@ -117,10 +117,14 @@ class ScoutAgent:
         )
 
         # Funding rate (best-effort, futures only)
+        # GET /fapi/v1/fundingRate returns an ARRAY — take the latest entry.
         funding_rate = None
         try:
             fr_data = await self.mcp.get_funding_rate(symbol.replace("USDT", "USDT_PERP"))
-            funding_rate = float(fr_data.get("lastFundingRate", 0))
+            if isinstance(fr_data, list) and fr_data:
+                funding_rate = float(fr_data[-1].get("lastFundingRate", 0))
+            elif isinstance(fr_data, dict):
+                funding_rate = float(fr_data.get("lastFundingRate", 0))
         except Exception:
             pass
 
@@ -156,42 +160,82 @@ class ScoutAgent:
     # ── Technical indicator helpers ──────────────────────────
 
     def _compute_rsi(self, klines, period: int = 14) -> Optional[float]:
-        """Relative Strength Index."""
+        """
+        RSI using Wilder's smoothing (the industry-standard formula).
+        Seed = simple average of the first `period` changes, then each
+        subsequent average is smoothed: avg = (prev*(p-1) + change) / p.
+        """
         if isinstance(klines, Exception) or len(klines) < period + 1:
             return None
         closes = [float(k[4]) for k in klines]  # index 4 = close price
         deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
-        gains  = [max(d, 0) for d in deltas[-period:]]
-        losses = [abs(min(d, 0)) for d in deltas[-period:]]
+
+        gains  = [max(d, 0) for d in deltas[:period]]
+        losses = [abs(min(d, 0)) for d in deltas[:period]]
         avg_gain = sum(gains) / period
         avg_loss = sum(losses) / period
+
+        # Wilder smoothing over the remaining deltas
+        for d in deltas[period:]:
+            gain = max(d, 0)
+            loss = abs(min(d, 0))
+            avg_gain = (avg_gain * (period - 1) + gain) / period
+            avg_loss = (avg_loss * (period - 1) + loss) / period
+
         if avg_loss == 0:
             return 100.0
+        if avg_gain == 0:
+            return 0.0
         rs = avg_gain / avg_loss
         return round(100 - (100 / (1 + rs)), 2)
 
     def _compute_macd_signal(self, klines) -> Optional[str]:
-        """Simple MACD crossover direction."""
-        if isinstance(klines, Exception) or len(klines) < 26:
+        """
+        True MACD: EMA(12) − EMA(26), then a 9-period EMA of that line
+        (the signal). Direction = crossover of the two lines, not sign.
+        """
+        if isinstance(klines, Exception) or len(klines) < 35:
             return None
         closes = [float(k[4]) for k in klines]
-        ema12 = self._ema(closes, 12)
-        ema26 = self._ema(closes, 26)
-        macd_line = ema12 - ema26
-        signal    = self._ema([macd_line], 1)  # simplified
-        if macd_line > 0:
+        ema12_series = self._ema_series(closes, 12)
+        ema26_series = self._ema_series(closes, 26)
+        # MACD line is only meaningful once both EMAs have converged.
+        macd_line = [a - b for a, b in zip(ema12_series, ema26_series)][26:]
+        signal_series = self._ema_series(macd_line, 9)
+
+        macd   = macd_line[-1]
+        signal = signal_series[-1]
+        prev_macd   = macd_line[-2]
+        prev_signal = signal_series[-2]
+
+        # Bullish/bearish on crossover, with sign as tiebreaker when flat.
+        if macd > signal and prev_macd <= prev_signal:
             return "bullish"
-        elif macd_line < 0:
+        if macd < signal and prev_macd >= prev_signal:
+            return "bearish"
+        if macd > signal:
+            return "bullish"
+        if macd < signal:
             return "bearish"
         return "neutral"
 
     def _ema(self, data: list[float], period: int) -> float:
-        """Exponential Moving Average."""
+        """Exponential Moving Average (final value)."""
+        return self._ema_series(data, period)[-1]
+
+    def _ema_series(self, data: list[float], period: int) -> list[float]:
+        """Full EMA series, seeded with the SMA of the first `period` values."""
+        if not data:
+            return []
+        if len(data) < period:
+            return [sum(data) / len(data)] * len(data)
         k = 2 / (period + 1)
-        ema = data[0]
-        for price in data[1:]:
+        ema = sum(data[:period]) / period
+        out = [ema] * period
+        for price in data[period:]:
             ema = price * k + ema * (1 - k)
-        return ema
+            out.append(ema)
+        return out
 
     def _compute_bollinger_position(self, klines, current_price: float, period: int = 20) -> Optional[str]:
         """Where current price sits relative to Bollinger Bands."""
