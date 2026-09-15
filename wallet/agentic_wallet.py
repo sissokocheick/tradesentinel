@@ -17,6 +17,11 @@ log = logging.getLogger("agentic_wallet")
 
 AGENTIC_ACCOUNT_ID = os.getenv("BINANCE_AGENTIC_ACCOUNT_ID", "")
 
+# Assets we are willing to price into USDC. Testnets airdrop junk tokens
+# (one is literally named 这是测试币); ignoring them keeps the equity
+# estimate honest and the logs clean instead of a wall of 400s.
+PRICED_ASSETS = {"BTC", "ETH", "BNB", "SOL", "XRP"}
+
 
 class AgenticWallet:
     """
@@ -63,20 +68,28 @@ class AgenticWallet:
             return {}
 
     async def get_total_usdc_value(self) -> float:
-        """Estimate total portfolio value in USDC (spot positions only)."""
+        """
+        Estimate total portfolio value in USDC (spot positions only).
+
+        Testnet accounts are airdropped junk tokens (e.g. literally named
+        "这是测试币"). We only price the assets we actually trade, so those
+        non-listable pairs never produce noisy 400s.
+        """
         balances = await self.get_all_balances()
         total = 0.0
         for asset, amounts in balances.items():
             qty = amounts["free"] + amounts["locked"]
+            if qty <= 0:
+                continue
             if asset in ("USDT", "USDC", "BUSD"):
                 total += qty
-            else:
+            elif asset in PRICED_ASSETS:
                 try:
                     ticker = await self.mcp.get_ticker(f"{asset}USDT")
                     price = float(ticker.get("price", 0))
                     total += qty * price
                 except Exception:
-                    pass
+                    pass  # Unlistable pair — skip silently rather than spam logs.
         return round(total, 2)
 
     def format_balance_report(self, balances: dict) -> str:
